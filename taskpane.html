@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+<title>Rapport d'audit - Panneau</title>
+<script type="text/javascript" src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+<style>
+  :root {
+    --navy: #001F60;
+    --gray: #D9D9D9;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: Segoe UI, -apple-system, Arial, sans-serif;
+    margin: 0;
+    padding: 16px;
+    color: #222;
+    font-size: 13px;
+    background: #fafafa;
+  }
+  h1 {
+    font-size: 15px;
+    color: var(--navy);
+    margin: 0 0 4px 0;
+  }
+  .subtitle {
+    font-size: 11px;
+    color: #666;
+    margin-bottom: 16px;
+  }
+  fieldset {
+    border: 1px solid var(--gray);
+    border-radius: 6px;
+    margin: 0 0 14px 0;
+    padding: 10px 12px;
+  }
+  legend {
+    font-weight: 600;
+    color: var(--navy);
+    font-size: 12px;
+    padding: 0 4px;
+  }
+  label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 6px 0;
+    cursor: pointer;
+  }
+  button {
+    display: block;
+    width: 100%;
+    background: var(--navy);
+    color: #fff;
+    border: none;
+    border-radius: 5px;
+    padding: 9px 10px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-bottom: 8px;
+  }
+  button:hover { opacity: 0.9; }
+  button.secondary {
+    background: #fff;
+    color: var(--navy);
+    border: 1px solid var(--navy);
+  }
+  #log {
+    margin-top: 14px;
+    padding: 8px 10px;
+    background: #fff;
+    border: 1px solid var(--gray);
+    border-radius: 6px;
+    font-size: 11px;
+    max-height: 220px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    color: #333;
+  }
+  .hint {
+    font-size: 10px;
+    color: #777;
+    margin: -4px 0 10px 0;
+  }
+  #status-banner {
+    display: none;
+    padding: 6px 10px;
+    border-radius: 5px;
+    font-size: 11px;
+    margin-bottom: 10px;
+  }
+</style>
+</head>
+<body>
+
+  <h1>Rapport d'audit technique</h1>
+  <div class="subtitle">Panneau de commande — Fitizers</div>
+
+  <div id="status-banner"></div>
+
+  <fieldset>
+    <legend>1. Formulaire de paramétrage</legend>
+    <label><input type="checkbox" id="crit-erp" /> ERP — Établissement recevant du public</label>
+    <label><input type="checkbox" id="crit-ert" /> ERT — Établissement recevant des travailleurs</label>
+    <label><input type="checkbox" id="crit-hab" /> HAB — Habitation</label>
+    <hr style="border:none;border-top:1px solid #eee;margin:8px 0" />
+    <label><input type="checkbox" id="crit-bat-unique" /> Bâtiment unique (mono-locataire)</label>
+    <label><input type="checkbox" id="crit-parking" /> Présence d'un parc de stationnement</label>
+    <label><input type="checkbox" id="crit-ascenseur" /> Présence d'ascenseur(s)</label>
+  </fieldset>
+
+  <button id="btn-generer">Générer le rapport</button>
+  <div class="hint">Retire les rubriques et lignes non concernées d'après les cases ci-dessus. À lancer une seule fois, sur une copie du modèle.</div>
+
+  <fieldset>
+    <legend>2. Tableau CAPEX</legend>
+    <button id="btn-ajouter-ligne" class="secondary">Ajouter une ligne (après la ligne sélectionnée)</button>
+    <button id="btn-recalculer" class="secondary">Recalculer les totaux</button>
+    <div class="hint">Cliquez d'abord dans une ligne de constat du tableau CAPEX avant « Ajouter une ligne ».</div>
+  </fieldset>
+
+  <div id="log"></div>
+
+<script>
+"use strict";
+
+const DOC_TABLE_COLS = 5;   // Document | Présence | Conforme | Date | Observations
+const CAPEX_COLS = 8;       // Tag | Constat | Statut | Bailleur/Loc | 4 tranches
+const SYNTH_COLS = 5;       // Poste | 4 tranches
+
+function log(msg) {
+  const el = document.getElementById("log");
+  const time = new Date().toLocaleTimeString("fr-FR");
+  el.textContent = `[${time}] ${msg}\n` + el.textContent;
+}
+
+function banner(msg, kind) {
+  const b = document.getElementById("status-banner");
+  b.textContent = msg;
+  b.style.display = "block";
+  b.style.background = kind === "error" ? "#FDE7E7" : kind === "ok" ? "#E7F7EE" : "#FFF6E0";
+  b.style.color = kind === "error" ? "#9B1C1C" : kind === "ok" ? "#116035" : "#7A5B00";
+}
+
+function errorHandler(err) {
+  console.error(err);
+  log("ERREUR : " + (err && err.message ? err.message : err));
+  if (err instanceof OfficeExtension.Error) {
+    log("Détail : " + JSON.stringify(err.debugInfo));
+  }
+  banner("Une erreur est survenue — voir le journal ci-dessous.", "error");
+}
+
+Office.onReady((info) => {
+  if (info.host !== Office.HostType.Word) {
+    banner("Ce panneau est prévu pour Word.", "error");
+    return;
+  }
+  document.getElementById("btn-generer").onclick = onGenererRapport;
+  document.getElementById("btn-ajouter-ligne").onclick = onAjouterLigneCapex;
+  document.getElementById("btn-recalculer").onclick = onRecalculerCapex;
+  log("Panneau prêt.");
+});
+
+// ---------------------------------------------------------------------
+// Utilitaires
+// ---------------------------------------------------------------------
+
+function parseEuros(s) {
+  if (!s) return 0;
+  const t = String(s).replace(/ /g, "").replace(/\s/g, "").replace(/€/g, "").replace(",", ".");
+  const v = parseFloat(t);
+  return isNaN(v) ? 0 : v;
+}
+
+function formatEuros(v) {
+  const rounded = Math.round(v);
+  return rounded.toLocaleString("fr-FR") + " €";
+}
+
+async function findTableByFirstCell(context, startsWith) {
+  const tables = context.document.body.tables;
+  tables.load("items");
+  await context.sync();
+  for (const t of tables.items) {
+    const cell = t.getCellOrNullObject(0, 0);
+    cell.load("isNullObject");
+    await context.sync();
+    if (cell.isNullObject) continue;
+    cell.body.load("text");
+    await context.sync();
+    if ((cell.body.text || "").trim().indexOf(startsWith) === 0) {
+      return t;
+    }
+  }
+  return null;
+}
+
+// supprime un bloc borné par un bookmark, en supprimant les paragraphes
+// entiers (pas de ligne vide residuelle)
+async function deleteBookmarkedRange(context, name) {
+  const range = context.document.getBookmarkRangeOrNullObject(name);
+  range.load("isNullObject");
+  await context.sync();
+  if (range.isNullObject) return false;
+  const paras = range.paragraphs;
+  paras.load("items");
+  await context.sync();
+  paras.items.forEach((p) => p.delete());
+  await context.sync();
+  return true;
+}
+
+// ---------------------------------------------------------------------
+// 1) GENERER LE RAPPORT
+// ---------------------------------------------------------------------
+
+async function onGenererRapport() {
+  const critState = {
+    ERP: document.getElementById("crit-erp").checked,
+    ERT: document.getElementById("crit-ert").checked,
+    HAB: document.getElementById("crit-hab").checked,
+    BAT_UNIQUE: document.getElementById("crit-bat-unique").checked,
+    PARKING: document.getElementById("crit-parking").checked,
+    ASCENSEUR: document.getElementById("crit-ascenseur").checked,
+  };
+
+  if (!confirm(
+    "Cette action va retirer définitivement du document les rubriques et lignes non " +
+    "concernées, d'après les cases cochées ci-dessus.\n\n" +
+    "À lancer une seule fois, sur une COPIE du modèle (pas sur le modèle lui-même).\n\n" +
+    "Continuer ?"
+  )) {
+    return;
+  }
+
+  try {
+    await Word.run(async (context) => {
+      // -- 1. bookmarks conditionnels bk_cond_* --
+      const bookmarks = context.document.bookmarks;
+      bookmarks.load("items/name");
+      await context.sync();
+
+      const condNames = bookmarks.items
+        .map((b) => b.name)
+        .filter((n) => n.indexOf("bk_cond_") === 0);
+
+      let removed = 0;
+      for (const name of condNames) {
+        const tag = name.substring("bk_cond_".length);
+        const keep = critState.hasOwnProperty(tag) ? critState[tag] : false;
+        if (!keep) {
+          const did = await deleteBookmarkedRange(context, name);
+          if (did) removed++;
+        }
+      }
+      log(`${condNames.length} bloc(s) conditionnel(s) détecté(s), ${removed} retiré(s).`);
+
+      // -- 2. filtrage Analyse documentaire --
+      await filterAnalyseDocumentaire(context, critState.ERP, critState.ERT, critState.HAB);
+
+      // -- 3. recalcul CAPEX --
+      await recalculerCapexCore(context);
+
+      await context.sync();
+    });
+
+    let removeFormulaire = confirm("Supprimer aussi la page \"Formulaire de paramétrage\" du document final ?");
+    if (removeFormulaire) {
+      await Word.run(async (context) => {
+        await deleteBookmarkedRange(context, "bk_formulaire_page");
+        await context.sync();
+      });
+    }
+
+    banner("Rapport généré. Faites Ctrl+A puis F9 dans le document pour mettre à jour le sommaire.", "ok");
+    log("Génération terminée.");
+  } catch (err) {
+    errorHandler(err);
+  }
+}
+
+async function filterAnalyseDocumentaire(context, wantERP, wantERT, wantHAB) {
+  const table = await findTableByFirstCell(context, "Document");
+  if (!table) {
+    log("Tableau 'Analyse documentaire' introuvable (entête 'Document' non trouvée).");
+    return;
+  }
+
+  // -- passe 1 : lit toutes les lignes, marque celles à supprimer --
+  let rows = table.rows;
+  rows.load("items");
+  await context.sync();
+  rows.items.forEach((r) => r.cells.load("items"));
+  await context.sync();
+
+  const fullRows = rows.items.filter((r) => r.cells.items.length === DOC_TABLE_COLS);
+  fullRows.forEach((r) => r.cells.items[DOC_TABLE_COLS - 1].body.load("text"));
+  await context.sync();
+
+  const toDelete = [];
+  let kept = 0;
+  for (const row of fullRows) {
+    const obsCell = row.cells.items[DOC_TABLE_COLS - 1];
+    const text = obsCell.body.text || "";
+    const m = text.match(/\[\[FLAGS:([^\]]*)\]\]/);
+    if (!m) continue;
+    const flags = m[1];
+    let keep = false;
+    if (wantERP && flags.indexOf("ERP") >= 0) keep = true;
+    if (wantERT && flags.indexOf("ERT") >= 0) keep = true;
+    if (wantHAB && flags.indexOf("HAB") >= 0) keep = true;
+    if (!keep) {
+      toDelete.push(row);
+    } else {
+      kept++;
+      const cleaned = text.replace(/\[\[FLAGS:[^\]]*\]\]/, "").trim();
+      obsCell.body.clear();
+      if (cleaned.length > 0) {
+        obsCell.body.insertText(cleaned, Word.InsertLocation.start);
+      }
+    }
+  }
+  toDelete.forEach((r) => r.delete());
+  await context.sync();
+  log(`Analyse documentaire : ${kept} document(s) conservé(s), ${toDelete.length} retiré(s).`);
+
+  // -- passe 2 : retire les entêtes de catégorie devenues orphelines --
+  rows = table.rows;
+  rows.load("items");
+  await context.sync();
+  rows.items.forEach((r) => r.cells.load("items"));
+  await context.sync();
+
+  const items = rows.items;
+  const isHeader = items.map((r) => r.cells.items.length < DOC_TABLE_COLS);
+  const orphanRows = [];
+  for (let i = 0; i < items.length; i++) {
+    if (!isHeader[i]) continue;
+    const nextIsHeaderOrEnd = i === items.length - 1 ? true : isHeader[i + 1];
+    if (nextIsHeaderOrEnd) orphanRows.push(items[i]);
+  }
+  orphanRows.forEach((r) => r.delete());
+  await context.sync();
+  if (orphanRows.length) log(`${orphanRows.length} entête(s) de catégorie orpheline(s) retirée(s).`);
+}
+
+// ---------------------------------------------------------------------
+// 2) CAPEX : ajout de ligne + recalcul
+// ---------------------------------------------------------------------
+
+async function onAjouterLigneCapex() {
+  try {
+    await Word.run(async (context) => {
+      const range = context.document.getSelection();
+      const parentCell = range.parentTableCellOrNullObject;
+      parentCell.load("rowIndex,isNullObject");
+      await context.sync();
+
+      if (parentCell.isNullObject) {
+        banner("Cliquez d'abord dans une ligne de constat du tableau CAPEX.", "error");
+        return;
+      }
+      const table = range.parentTableOrNullObject;
+      table.load("isNullObject");
+      await context.sync();
+      if (table.isNullObject) {
+        banner("Sélection hors tableau.", "error");
+        return;
+      }
+
+      const headerCell = table.getCellOrNullObject(0, 0);
+      headerCell.load("isNullObject");
+      await context.sync();
+      if (headerCell.isNullObject) {
+        banner("Tableau non reconnu.", "error");
+        return;
+      }
+      headerCell.body.load("text");
+      await context.sync();
+      if ((headerCell.body.text || "").trim().indexOf("Tag") !== 0) {
+        banner("Cette action ne s'applique qu'au tableau CAPEX (cliquez dans une ligne de constat CAPEX).", "error");
+        return;
+      }
+
+      const row = table.rows.getItemAt(parentCell.rowIndex);
+      row.cells.load("items");
+      await context.sync();
+
+      if (row.cells.items.length < CAPEX_COLS) {
+        banner("Cette ligne est une ligne de titre/sous-total : cliquez dans une ligne de constat.", "error");
+        return;
+      }
+
+      const newValues = [[
+        "[TECH]",
+        "Cliquez ici pour décrire le désordre / la non-conformité constatée",
+        "NC", "B", "", "", "", "",
+      ]];
+      row.insertRows(Word.InsertLocation.after, 1, newValues);
+      await context.sync();
+      log("Ligne CAPEX ajoutée. Pensez à Recalculer les totaux.");
+      banner("Ligne ajoutée.", "ok");
+    });
+  } catch (err) {
+    errorHandler(err);
+  }
+}
+
+async function onRecalculerCapex() {
+  try {
+    await Word.run(async (context) => {
+      await recalculerCapexCore(context);
+      await context.sync();
+    });
+    banner("Totaux CAPEX recalculés.", "ok");
+    log("Recalcul terminé.");
+  } catch (err) {
+    errorHandler(err);
+  }
+}
+
+async function recalculerCapexCore(context) {
+  const table = await findTableByFirstCell(context, "Tag");
+  if (!table) {
+    log("Tableau CAPEX maître introuvable (entête 'Tag' non trouvée).");
+    return;
+  }
+
+  const rows = table.rows;
+  rows.load("items");
+  await context.sync();
+  rows.items.forEach((r) => r.cells.load("items"));
+  await context.sync();
+
+  // charge le texte de toutes les cellules utiles
+  const rowMeta = rows.items.map((r) => ({ row: r, cells: r.cells.items, merged: r.cells.items.length < CAPEX_COLS }));
+  rowMeta.forEach((m) => {
+    m.cells[0].body.load("text");
+    if (!m.merged) {
+      for (let k = 0; k < CAPEX_COLS; k++) m.cells[k].body.load("text");
+    }
+  });
+  await context.sync();
+
+  let rubriqueLabel = "";
+  let sumB = [0, 0, 0, 0], sumL = [0, 0, 0, 0];
+  let grandB = [0, 0, 0, 0], grandL = [0, 0, 0, 0];
+  const rubriqueSynth = {};
+
+  for (const m of rowMeta) {
+    if (m.merged) {
+      const label = (m.cells[0].body.text || "").trim();
+      const n = m.cells.length; // ex : 6 pour une ligne sous-total (label fusionné + B/L vide + 4 tranches)
+      const bucketStart = n - 4;
+
+      if (label.indexOf("Sous-total Bailleur") === 0) {
+        for (let k = 0; k < 4; k++) {
+          m.cells[bucketStart + k].body.insertText(formatEuros(sumB[k]), Word.InsertLocation.replace);
+          grandB[k] += sumB[k];
+        }
+        rubriqueSynth[rubriqueLabel] = sumB.slice();
+        sumB = [0, 0, 0, 0];
+      } else if (label.indexOf("Sous-total Locataire") === 0) {
+        for (let k = 0; k < 4; k++) {
+          m.cells[bucketStart + k].body.insertText(formatEuros(sumL[k]), Word.InsertLocation.replace);
+          grandL[k] += sumL[k];
+        }
+        sumL = [0, 0, 0, 0];
+      } else if (label.indexOf("TRAVAUX A PREVOIR LOCATAIRE") === 0) {
+        for (let k = 0; k < 4; k++) m.cells[bucketStart + k].body.insertText(formatEuros(grandL[k]), Word.InsertLocation.replace);
+      } else if (label.indexOf("TRAVAUX A PREVOIR (BAILLEUR)") === 0) {
+        for (let k = 0; k < 4; k++) m.cells[bucketStart + k].body.insertText(formatEuros(grandB[k]), Word.InsertLocation.replace);
+      } else if (label.indexOf("(+10") >= 0) {
+        for (let k = 0; k < 4; k++) m.cells[bucketStart + k].body.insertText(formatEuros(grandB[k] * 0.1), Word.InsertLocation.replace);
+      } else if (label.indexOf("tudes MOE") >= 0) {
+        for (let k = 0; k < 4; k++) m.cells[bucketStart + k].body.insertText(formatEuros(grandB[k] * 0.15), Word.InsertLocation.replace);
+      } else if (label.indexOf("TOTAL HT") === 0) {
+        for (let k = 0; k < 4; k++) m.cells[bucketStart + k].body.insertText(formatEuros(grandB[k] * 1.25), Word.InsertLocation.replace);
+      } else {
+        rubriqueLabel = label.toUpperCase();
+      }
+    } else {
+      const bl = (m.cells[3].body.text || "").trim().toUpperCase();
+      for (let k = 0; k < 4; k++) {
+        const v = parseEuros(m.cells[4 + k].body.text);
+        if (bl.indexOf("B") === 0) sumB[k] += v;
+        else if (bl.indexOf("L") === 0) sumL[k] += v;
+      }
+    }
+  }
+  await context.sync();
+
+  // -- met à jour la table de synthèse --
+  const tblSynth = await findTableByFirstCell(context, "Poste");
+  if (tblSynth) {
+    const srows = tblSynth.rows;
+    srows.load("items");
+    await context.sync();
+    srows.items.forEach((r) => r.cells.load("items"));
+    await context.sync();
+    srows.items.forEach((r) => r.cells.items[0].body.load("text"));
+    await context.sync();
+
+    for (const r of srows.items) {
+      const lbl = (r.cells.items[0].body.text || "").trim().toUpperCase();
+      if (!lbl) continue;
+      if (rubriqueSynth.hasOwnProperty(lbl)) {
+        const arr = rubriqueSynth[lbl];
+        for (let k = 0; k < 4; k++) r.cells.items[1 + k].body.insertText(formatEuros(arr[k]), Word.InsertLocation.replace);
+      } else if (lbl.indexOf("AL") >= 0 && lbl.indexOf("10") >= 0) {
+        for (let k = 0; k < 4; k++) r.cells.items[1 + k].body.insertText(formatEuros(grandB[k] * 0.1), Word.InsertLocation.replace);
+      } else if (lbl.indexOf("TUDES") >= 0) {
+        for (let k = 0; k < 4; k++) r.cells.items[1 + k].body.insertText(formatEuros(grandB[k] * 0.15), Word.InsertLocation.replace);
+      } else if (lbl.indexOf("BAILLEUR") >= 0) {
+        for (let k = 0; k < 4; k++) r.cells.items[1 + k].body.insertText(formatEuros(grandB[k] * 1.25), Word.InsertLocation.replace);
+      } else if (lbl.indexOf("LOCATAIRE") >= 0) {
+        for (let k = 0; k < 4; k++) r.cells.items[1 + k].body.insertText(formatEuros(grandL[k]), Word.InsertLocation.replace);
+      }
+    }
+    await context.sync();
+  }
+}
+</script>
+</body>
+</html>
